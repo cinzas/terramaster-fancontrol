@@ -1,5 +1,6 @@
 // MIT License
 
+// Copyright (c) 2020 Joao Amaro
 // Copyright (c) 2019 Eudean Sun
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -48,7 +49,8 @@ const static int pwmmax = 255; // Max PWM value, do not change
 const static uint8_t port = 0x2e;
 const static uint8_t fanspeed = 200;
 static uint16_t ecbar = 0x00;
-const static char * synostoragedir = "/opt/disks";
+static int lmsensors = 0; // Use lmsensors to read temperatures (0 is NO, 1 is Yes)
+const static char * synostoragedir = "/var/run/disks";  // Directory to identify disks for reading temp with smartctl
 
 void iowrite(uint8_t reg, uint8_t val) {
   outb(reg, port);
@@ -72,30 +74,32 @@ uint8_t ecread(uint8_t reg) {
 
 int main(int argc, char * argv[]) {
   switch (argc) {
+  case 12:
+    kd = atof(argv[11]);
   case 11:
-    kd = atof(argv[10]);
+    imax = atof(argv[10]);
   case 10:
-    imax = atof(argv[9]);
+    ki = atof(argv[9]);
   case 9:
-    ki = atof(argv[8]);
+    kp = atof(argv[8]);
   case 8:
-    kp = atof(argv[7]);
+    pwmmin = atoi(argv[7]);
   case 7:
-    pwmmin = atoi(argv[6]);
+    overheat = atoi(argv[6]);
   case 6:
-    overheat = atoi(argv[5]);
+    interval = atoi(argv[5]);
   case 5:
-    interval = atoi(argv[4]);
+    setpoint = atoi(argv[3]);
   case 4:
     pwminit = atoi(argv[3]);
   case 3:
-    setpoint = atoi(argv[2]);
+    lmsensors = atoi(argv[2]);
   case 2:
     if (strncmp(argv[1], "-h", 3) == 0) {
       printf("Usage:\n"
 	     "\n"
 	     " fancontrol\n"
-	     " fancontrol <debug> <setpoint> <pwminit> <interval> <overheat> <pwmmin> <kp> <ki> <imax> <kd>\n"
+	     " fancontrol <debug> <setpoint> <lmsensors> <pwminit> <interval> <overheat> <pwmmin> <kp> <ki> <imax> <kd>\n"
 	     "\n"
 	     "Arguments must be specified in order. Arguments that are not \n"
 	     "specified will take their default value.\n"
@@ -103,6 +107,8 @@ int main(int argc, char * argv[]) {
 	     "debug     Enable (1) or disable (0) debug logs (default: 0)\n"
 	     "setpoint  Target maximum hard drive operating temperature in\n"
 	     "          degrees Celsius (default: 37)\n"
+	     "lmsensors Enable (1) or disable (0) for getting temperature from lmsensors\n"
+	     "          Adapter (it8772-osa-0a30) (default: 0) \n"
 	     "pwminit   Initial PWM value to write (default: 128)\n"
 	     "interval  How often we poll for temperatures in seconds (default: 10)\n"
 	     "overheat  Overheat temperature threshold in degrees Celsius above \n"
@@ -164,36 +170,84 @@ int main(int argc, char * argv[]) {
   clock_gettime(CLOCK_MONOTONIC, &lasttime);
 
   while (true) {
-    DIR * dir = opendir(synostoragedir);
-    if (dir == NULL) {
-      goto endloop;
-    }
-    struct dirent * entity;
-    maxtemp = 0;
-    char smartcmd[200];
-    while ((entity = readdir(dir)) != NULL) {
-      if ((strncmp(entity->d_name, ".", 2) == 0) ||
-	  (strncmp(entity->d_name, "..", 3) == 0)) {
-	continue;
+    // Read temperature from path synostoragedir
+    if (lmsensors ==0) {
+      DIR * dir = opendir(synostoragedir);
+      if (dir == NULL) {
+        goto endloop;
       }
-      snprintf(smartcmd, 200,
-	       "smartctl -A -d sat /dev/%s | "
-	       "grep Temperature_Celsius | "
-	       "awk '{print $10}'",
-	       entity->d_name);
-      FILE * pipe = popen(smartcmd, "r");
-      char tempstring[20];
-      if (!pipe) {
-	continue;
+      struct dirent * entity;
+      maxtemp = 0;
+      char smartcmd[200];
+      while ((entity = readdir(dir)) != NULL) {
+        if ((strncmp(entity->d_name, ".", 2) == 0) ||
+  	  (strncmp(entity->d_name, "..", 3) == 0)) {
+  	continue;
+        }
+        snprintf(smartcmd, 200,
+  	       "smartctl -A -d sat /dev/%s | "
+  	       "grep Temperature_Celsius | "
+  	       "awk '{print $10}'",
+  	       entity->d_name);
+        FILE * pipe = popen(smartcmd, "r");
+        char tempstring[20];
+        if (!pipe) {
+  	  continue;
+        }
+        fgets(tempstring, sizeof(tempstring), pipe);
+        pclose(pipe);
+        int temp = atoi(tempstring);
+        if (temp > maxtemp) {
+  	  maxtemp = temp;
+        }
       }
-      fgets(tempstring, sizeof(tempstring), pipe);
-      pclose(pipe);
-      int temp = atoi(tempstring);
-      if (temp > maxtemp) {
-	maxtemp = temp;
-      }
-    }
     closedir(dir);
+    }
+   // Read temperature from lmsensors
+   else {
+        maxtemp = 0;
+        char sensorscmd[200];
+	char readvalue[4];
+
+        snprintf(sensorscmd, 200,
+  	       "sensors -A it8772-isa-0a30 -u | "
+  	       "grep temp1_input| "
+  	       "awk '{print int($2)}'",
+  	       readvalue);
+        FILE * pipe = popen(sensorscmd, "r");
+        char tempstring[20];
+        if (!pipe) {
+  	  continue;
+        }
+        fgets(tempstring, sizeof(tempstring), pipe);
+        pclose(pipe);
+        int temp1 = atoi(tempstring);  // Value from sensor 1
+
+        if (temp1 > maxtemp) {
+  	  maxtemp = temp1;
+        }
+
+//        snprintf(sensorscmd, 200,
+//  	       "sensors -A it8772-isa-0a30 -u | "
+//  	       "grep temp2_input| "
+//  	       "awk '{print int($2)}'",
+//  	       readvalue);
+//        pipe = popen(sensorscmd, "r");
+//        tempstring[20];
+//        if (!pipe) {
+//  	  continue;
+//        }
+//        fgets(tempstring, sizeof(tempstring), pipe);
+//        pclose(pipe);
+//        int temp2 = atoi(tempstring);  // Value from sensor 2
+//	
+//	int avg_temp = (int)(temp1+temp2)/2;  // Average values from the two sensors
+//
+//        if (avg_temp> maxtemp) {
+//  	  maxtemp = avg_temp;
+//        }
+    }
+    
 
     // Calculate time since last poll
     clock_gettime(CLOCK_MONOTONIC, &curtime);

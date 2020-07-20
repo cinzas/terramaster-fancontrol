@@ -1,0 +1,19 @@
+# Fan control 
+# Default target temperature -> 40
+#
+# Copy file to /etc/systemd/system
+#
+# sudo systemctl start fancontrol-sensors.service
+# sudo systemctl enable fancontrol-sensors.service
+#
+
+[Unit]
+Description=Fancontrol
+
+[Service]
+ExecStart=/usr/local/bin/fancontrol 0 40 1
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target 
+

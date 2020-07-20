@@ -1,0 +1,28 @@
+# Fan control 
+# Default target temperature -> 40
+#
+# Create disks in /var/run/disks/
+# 	e.g: touch /var/run/disks/sd[abcde]
+# 	
+# Copy file to /etc/systemd/system
+#
+# sudo systemctl start fancontrol-smartctl.service
+# sudo systemctl enable fancontrol-smartctl.service
+#
+
+[Unit]
+Description=Fancontrol
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /var/run/disks 
+ExecStartPre=/usr/bin/touch /var/run/disks/sda
+ExecStartPre=/usr/bin/touch /var/run/disks/sdb
+ExecStartPre=/usr/bin/touch /var/run/disks/sdc
+ExecStartPre=/usr/bin/touch /var/run/disks/sdd
+ExecStartPre=/usr/bin/touch /var/run/disks/sde
+ExecStart=/usr/local/bin/fancontrol 0 40
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target 
+
